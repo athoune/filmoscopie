@@ -1,143 +1,149 @@
 import bz2
 import json
 import re
-from typing import Optional, Dict, TextIO
-from lxml import etree
 from pathlib import Path
+from typing import Dict, Optional, TextIO
+
+from wiki_dump_reader import Cleaner, iterate
 
 
-class WikipediaFilmExtractorIncremental:
+class WikipediaFilmExtractor:
+    """
+    Extracts film data from French Wikipedia dump and writes to JSON Lines format.
+    Uses wiki-dump-reader for efficient parsing without loading everything in RAM.
+    """
+
     def __init__(self, dump_path: str, output_path: str):
         self.dump_path = dump_path
         self.output_path = output_path
         self.films_count = 0
         self.pages_processed = 0
 
-        # Namespace XML de Wikipedia
-        self.ns = {"mw": "http://www.mediawiki.org/xml/export-0.10/"}
+        # Initialize wiki cleaner to remove markup
+        self.cleaner = Cleaner()
 
     def parse_dump(self):
-        """Parse le dump de manière incrémentale et écrit en JSON Lines"""
+        """
+        Parse the Wikipedia dump incrementally and write films to JSON Lines.
+        Memory efficient: processes one page at a time.
+        """
+        print(f"Opening dump: {self.dump_path}")
+        print(f"Output file: {self.output_path}")
+        print("Starting incremental parsing...\n")
 
-        print(f"Ouverture du dump: {self.dump_path}")
-
-        # Ouvrir le fichier d'entrée (bz2 ou non)
-        if self.dump_path.endswith(".bz2"):
-            input_file = bz2.open(self.dump_path, "rb")
-        else:
-            input_file = open(self.dump_path, "rb")
-
-        # Ouvrir le fichier de sortie en mode append
+        # Open output file in write mode
         with open(self.output_path, "w", encoding="utf-8") as output_file:
-            # Parser incrémental avec iterparse
-            context = etree.iterparse(
-                input_file,
-                events=(
-                    "start",
-                    "end",
-                ),
-                tag="{http://www.mediawiki.org/xml/export-0.10/}page",
-            )
+            # Iterate through pages in the dump
+            # wiki-dump-reader handles decompression and parsing automatically
+            if self.dump_path.endswith(".bz2"):
+                reader = bz2.open(self.dump_path, "rt")
+            else:
+                reader = open(self.dump_path, "r")
 
-            print("Début du parsing incrémental...\n")
-
-            for event, elem in context:
+            for title, text in iterate(reader):
                 self.pages_processed += 1
 
-                # Traiter la page
-                film_data = self._process_page(elem)
+                # Process the page
+                film_data = self._process_page(title, text)
 
-                # Si c'est un film, l'écrire immédiatement
+                # If it's a film, write it immediately to the file
                 if film_data:
                     self._write_jsonl(output_file, film_data)
                     self.films_count += 1
 
-                    # Afficher la progression tous les 100 films
+                    # Display progress every 100 films
                     if self.films_count % 100 == 0:
                         print(
-                            f"✓ {self.films_count} films extraits "
-                            f"({self.pages_processed} pages traitées)"
+                            f"✓ {self.films_count} films extracted "
+                            f"({self.pages_processed:,} pages processed)"
                         )
 
-                # CRUCIAL: Libérer la mémoire
-                elem.clear()
-                # Nettoyer aussi les parents pour éviter les fuites mémoire
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-
-            # Nettoyer le contexte
-            del context
-
-        input_file.close()
-
         print(f"\n{'='*60}")
-        print(f"Extraction terminée!")
-        print(f"  - Pages traitées: {self.pages_processed:,}")
-        print(f"  - Films extraits: {self.films_count:,}")
-        print(f"  - Fichier de sortie: {self.output_path}")
+        print("Extraction complete!")
+        print(f"  - Pages processed: {self.pages_processed:,}")
+        print(f"  - Films extracted: {self.films_count:,}")
+        print(f"  - Output file: {self.output_path}")
         print(f"{'='*60}")
 
-    def _process_page(self, page_elem) -> Optional[Dict]:
-        """Traite un élément page et retourne les données du film si applicable"""
+    def _process_page(self, title: str, text: str) -> Optional[Dict]:
+        """
+        Process a single Wikipedia page and extract film data if applicable.
 
-        # Extraire le titre
-        title_elem = page_elem.find("mw:title", self.ns)
-        if title_elem is None or title_elem.text is None:
+        Args:
+            title: Page title
+            text: Page wikitext content
+
+        Returns:
+            Dictionary with film data or None if not a film article
+        """
+        # Check if this is a film article
+        if not self._is_film_article(text):
             return None
 
-        title = title_elem.text
+        # Extract structured data from the film
+        return self._extract_film_data(title, text)
 
-        # Extraire le contenu
-        revision = page_elem.find("mw:revision", self.ns)
-        if revision is None:
-            return None
+    def _is_film_article(self, text: str) -> bool:
+        """
+        Detect if the article is about a film by looking for film infoboxes.
 
-        text_elem = revision.find("mw:text", self.ns)
-        if text_elem is None or text_elem.text is None:
-            return None
-
-        content = text_elem.text
-
-        # Vérifier si c'est un film
-        if not self._is_film_article(content):
-            return None
-
-        # Extraire les données du film
-        return self._extract_film_data(title, content)
-
-    def _is_film_article(self, content: str) -> bool:
-        """Détecte si l'article concerne un film"""
-        # Recherche d'infobox cinéma (case-insensitive)
+        French Wikipedia uses various infobox templates for films:
+        - {{Infobox Cinéma...
+        - {{Infobox Film...
+        - {{Infobox film...
+        """
         infobox_patterns = [
             r"\{\{Infobox Cinéma",
             r"\{\{Infobox Film",
             r"\{\{Infobox film",
         ]
+
         return any(
-            re.search(pattern, content, re.IGNORECASE) for pattern in infobox_patterns
+            re.search(pattern, text, re.IGNORECASE) for pattern in infobox_patterns
         )
 
-    def _extract_film_data(self, title: str, content: str) -> Dict:
-        """Extrait les données structurées du film"""
+    def _extract_film_data(self, title: str, text: str) -> Dict:
+        """
+        Extract structured data from a film article.
 
+        Parses the infobox to extract:
+        - Original title
+        - Director
+        - Year
+        - Country
+        - Genre
+        - Duration
+        - Actors
+        - Writer
+        - Producer
+        - Budget
+
+        Args:
+            title: Film title (page title)
+            text: Article wikitext
+
+        Returns:
+            Dictionary with extracted film data
+        """
         film_data = {
-            "titre": title,
-            "titre_original": None,
-            "realisateur": None,
-            "annee": None,
-            "pays": None,
+            "title": title,
+            "original_title": None,
+            "director": None,
+            "year": None,
+            "country": None,
             "genre": None,
-            "duree": None,
-            "acteurs": [],
-            "scenariste": None,
-            "producteur": None,
+            "duration_minutes": None,
+            "actors": [],
+            "writer": None,
+            "producer": None,
             "budget": None,
         }
 
-        # Trouver l'infobox
+        # Find the infobox using regex
+        # Matches {{Infobox ... | ... }}
         infobox_match = re.search(
             r"\{\{Infobox[^}]*?(Cinéma|Film|film)\s*\|?(.*?)\n\}\}",
-            content,
+            text,
             re.DOTALL | re.IGNORECASE,
         )
 
@@ -146,105 +152,153 @@ class WikipediaFilmExtractorIncremental:
 
         infobox_content = infobox_match.group(2)
 
-        # Extraction des champs
+        # Define field patterns to extract from infobox
+        # French field names -> English keys
         field_patterns = {
-            "titre_original": r"titre original\s*=\s*(.+)",
-            "realisateur": r"réalisation\s*=\s*(.+)",
-            "scenariste": r"scénario\s*=\s*(.+)",
-            "producteur": r"producteur\s*=\s*(.+)",
-            "pays": r"pays\s*=\s*(.+)",
+            "original_title": r"titre original\s*=\s*(.+)",
+            "director": r"réalisation\s*=\s*(.+)",
+            "writer": r"scénario\s*=\s*(.+)",
+            "producer": r"(?:producteur|production)\s*=\s*(.+)",
+            "country": r"pays\s*=\s*(.+)",
             "genre": r"genre\s*=\s*(.+)",
             "budget": r"budget\s*=\s*(.+)",
         }
 
+        # Extract each field
         for field, pattern in field_patterns.items():
             match = re.search(pattern, infobox_content, re.IGNORECASE)
             if match:
                 film_data[field] = self._clean_value(match.group(1))
 
-        # Année (extraction spécifique)
-        annee_match = re.search(r"année\s*=\s*(\d{4})", infobox_content, re.IGNORECASE)
-        if annee_match:
-            film_data["annee"] = int(annee_match.group(1))
+        # Extract year (special handling for integer)
+        year_match = re.search(r"année\s*=\s*(\d{4})", infobox_content, re.IGNORECASE)
+        if year_match:
+            film_data["year"] = int(year_match.group(1))
 
-        # Date de sortie alternative
-        if not film_data["annee"]:
+        # Alternative: extract from release date if year not found
+        if not film_data["year"]:
             date_match = re.search(
                 r"(?:sortie|date)\s*=.*?(\d{4})", infobox_content, re.IGNORECASE
             )
             if date_match:
-                film_data["annee"] = int(date_match.group(1))
+                film_data["year"] = int(date_match.group(1))
 
-        # Durée
-        duree_match = re.search(r"durée\s*=\s*(\d+)", infobox_content, re.IGNORECASE)
-        if duree_match:
-            film_data["duree"] = int(duree_match.group(1))
+        # Extract duration in minutes
+        duration_match = re.search(r"durée\s*=\s*(\d+)", infobox_content, re.IGNORECASE)
+        if duration_match:
+            film_data["duration_minutes"] = int(duration_match.group(1))
 
-        # Acteurs
-        acteurs_match = re.search(
+        # Extract actors list
+        actors_match = re.search(
             r"acteur\s*=\s*(.+?)(?:\n\||\n\}\})",
             infobox_content,
             re.IGNORECASE | re.DOTALL,
         )
-        if acteurs_match:
-            film_data["acteurs"] = self._parse_list(acteurs_match.group(1))
+        if actors_match:
+            film_data["actors"] = self._parse_list(actors_match.group(1))
 
         return film_data
 
     def _clean_value(self, value: str) -> str:
-        """Nettoie une valeur extraite"""
+        """
+        Clean extracted value by removing wiki markup and HTML.
+
+        Removes:
+        - Wiki links: [[Link|Text]] -> Text
+        - HTML tags: <tag>content</tag> -> content
+        - References: <ref>...</ref> -> (removed)
+        - Wiki formatting: '''bold''' -> bold
+
+        Args:
+            value: Raw extracted value
+
+        Returns:
+            Cleaned string
+        """
         value = value.strip()
 
-        # Enlever les liens wiki [[Lien|Texte]] -> Texte ou [[Lien]] -> Lien
+        # Remove wiki links [[Link|Text]] -> Text or [[Link]] -> Link
         value = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", value)
 
-        # Enlever les balises HTML
+        # Remove HTML tags
         value = re.sub(r"<[^>]+>", "", value)
 
-        # Enlever les refs
+        # Remove references <ref>...</ref>
         value = re.sub(r"<ref[^>]*>.*?</ref>", "", value, flags=re.DOTALL)
         value = re.sub(r"<ref[^>]*/?>", "", value)
 
-        # Enlever les balises wiki simples
+        # Remove wiki formatting (bold, italic)
         value = re.sub(r"'{2,}", "", value)
 
-        # Nettoyer les espaces multiples
+        # Clean multiple spaces
         value = re.sub(r"\s+", " ", value)
 
         return value.strip()
 
     def _parse_list(self, text: str) -> list:
-        """Parse une liste d'éléments (acteurs, etc.)"""
+        """
+        Parse a list of items (actors, etc.) from wiki text.
+
+        Handles:
+        - Bullet lists: * Item
+        - Line breaks
+        - Comma separated values
+
+        Args:
+            text: Raw list text
+
+        Returns:
+            List of cleaned items (max 10)
+        """
         text = self._clean_value(text)
 
-        # Séparer par ligne ou par virgule
+        # Split by newline, bullets, or commas
         items = re.split(r"\n\*|\n-|<br\s*/?>|,", text)
 
-        # Nettoyer et filtrer
+        # Clean and filter items
         cleaned_items = []
         for item in items:
             item = item.strip()
-            item = re.sub(r"^\*+\s*", "", item)  # Enlever les bullets
+            # Remove leading bullets or dashes
+            item = re.sub(r"^\*+\s*", "", item)
             item = re.sub(r"^-+\s*", "", item)
+
+            # Only keep non-empty items
             if item and len(item) > 1:
                 cleaned_items.append(item)
 
-        return cleaned_items[:10]  # Limiter à 10 éléments
+        # Limit to 10 items to avoid huge lists
+        return cleaned_items[:10]
 
     def _write_jsonl(self, file: TextIO, data: Dict):
-        """Écrit une ligne JSON dans le fichier"""
+        """
+        Write a single JSON object as a line to the file (JSON Lines format).
+
+        Args:
+            file: Open file handle
+            data: Dictionary to write
+        """
         json_line = json.dumps(data, ensure_ascii=False)
         file.write(json_line + "\n")
 
 
 class JSONLinesReader:
-    """Utilitaire pour lire le fichier JSON Lines"""
+    """
+    Utility class to read and manipulate JSON Lines files efficiently.
+    Allows streaming processing without loading everything into memory.
+    """
 
     def __init__(self, filepath: str):
         self.filepath = filepath
 
     def read_all(self) -> list:
-        """Lit tous les films (attention à la mémoire)"""
+        """
+        Read all films into memory.
+        WARNING: Use only for small files or you'll run out of RAM!
+
+        Returns:
+            List of all film dictionaries
+        """
         films = []
         with open(self.filepath, "r", encoding="utf-8") as f:
             for line in f:
@@ -252,13 +306,23 @@ class JSONLinesReader:
         return films
 
     def iterate(self):
-        """Itère sur les films sans tout charger en mémoire"""
+        """
+        Iterate over films one at a time (memory efficient).
+
+        Yields:
+            Film dictionary for each line
+        """
         with open(self.filepath, "r", encoding="utf-8") as f:
             for line in f:
                 yield json.loads(line)
 
     def count(self) -> int:
-        """Compte le nombre de films"""
+        """
+        Count total number of films in the file.
+
+        Returns:
+            Number of lines (films)
+        """
         count = 0
         with open(self.filepath, "r", encoding="utf-8") as f:
             for _ in f:
@@ -266,7 +330,15 @@ class JSONLinesReader:
         return count
 
     def sample(self, n: int = 10) -> list:
-        """Récupère les n premiers films"""
+        """
+        Get the first n films.
+
+        Args:
+            n: Number of films to retrieve
+
+        Returns:
+            List of first n films
+        """
         films = []
         with open(self.filepath, "r", encoding="utf-8") as f:
             for i, line in enumerate(f):
@@ -276,7 +348,16 @@ class JSONLinesReader:
         return films
 
     def filter(self, condition, output_path: str):
-        """Filtre les films selon une condition et écrit dans un nouveau fichier"""
+        """
+        Filter films based on a condition and write to new file.
+
+        Args:
+            condition: Function that takes a film dict and returns bool
+            output_path: Path to write filtered results
+
+        Returns:
+            Number of films that matched the condition
+        """
         count = 0
         with open(self.filepath, "r", encoding="utf-8") as infile:
             with open(output_path, "w", encoding="utf-8") as outfile:
@@ -285,93 +366,100 @@ class JSONLinesReader:
                     if condition(film):
                         outfile.write(line)
                         count += 1
-        print(f"Filtré: {count} films écrits dans {output_path}")
+        print(f"Filtered: {count} films written to {output_path}")
         return count
 
     def to_json(self, output_path: str):
-        """Convertit JSON Lines vers JSON standard (array)"""
+        """
+        Convert JSON Lines to standard JSON array format.
+        WARNING: Loads everything into memory!
+
+        Args:
+            output_path: Path to write JSON array
+        """
         films = self.read_all()
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(films, f, ensure_ascii=False, indent=2)
-        print(f"Converti en JSON: {output_path}")
+        print(f"Converted to JSON: {output_path}")
 
 
-# Script d'utilisation principal
+# =============================================================================
+# MAIN SCRIPT
+# =============================================================================
+
 if __name__ == "__main__":
-    # ===== ÉTAPE 1: Extraction =====
+    # ===== STEP 1: EXTRACTION =====
     print("=" * 60)
-    print("EXTRACTION DES FILMS DEPUIS LE DUMP WIKIPEDIA")
+    print("EXTRACTING FILMS FROM WIKIPEDIA DUMP")
     print("=" * 60 + "\n")
 
     dump_file = "frwiki-latest-pages-articles.xml.bz2"
     output_file = "films_wikipedia.jsonl"
 
-    # Vérifier que le dump existe
+    # Check if dump file exists
     if not Path(dump_file).exists():
-        print(f"⚠️  Fichier dump non trouvé: {dump_file}")
-        print("Téléchargez-le depuis: https://dumps.wikimedia.org/frwiki/latest/")
-        print("Exemple: frwiki-latest-pages-articles.xml.bz2")
+        print(f"⚠️  Dump file not found: {dump_file}")
+        print("Download from: https://dumps.wikimedia.org/frwiki/latest/")
+        print("Example: frwiki-latest-pages-articles.xml.bz2")
         exit(1)
 
-    # Créer l'extracteur et lancer le parsing
-    extractor = WikipediaFilmExtractorIncremental(dump_file, output_file)
+    # Create extractor and start parsing
+    extractor = WikipediaFilmExtractor(dump_file, output_file)
     extractor.parse_dump()
 
-    # ===== ÉTAPE 2: Utilisation du fichier JSON Lines =====
+    # ===== STEP 2: USING THE JSON LINES FILE =====
     print("\n" + "=" * 60)
-    print("UTILISATION DU FICHIER JSON LINES")
+    print("USING THE JSON LINES FILE")
     print("=" * 60 + "\n")
 
     reader = JSONLinesReader(output_file)
 
-    # Compter les films
+    # Count films
     total = reader.count()
-    print(f"Total de films dans le fichier: {total:,}\n")
+    print(f"Total films in file: {total:,}\n")
 
-    # Afficher quelques exemples
-    print("Exemples de films extraits:")
+    # Display some examples
+    print("Sample films extracted:")
     print("-" * 60)
     for i, film in enumerate(reader.sample(5), 1):
-        print(f"{i}. {film['titre']}")
-        if film["annee"]:
-            print(f"   Année: {film['annee']}")
-        if film["realisateur"]:
-            print(f"   Réalisateur: {film['realisateur']}")
+        print(f"{i}. {film['title']}")
+        if film["year"]:
+            print(f"   Year: {film['year']}")
+        if film["director"]:
+            print(f"   Director: {film['director']}")
         if film["genre"]:
             print(f"   Genre: {film['genre']}")
         print()
 
-    # ===== ÉTAPE 3: Exemples de filtrage =====
+    # ===== STEP 3: FILTERING EXAMPLES =====
     print("=" * 60)
-    print("EXEMPLES DE FILTRAGE")
+    print("FILTERING EXAMPLES")
     print("=" * 60 + "\n")
 
-    # Filtrer les films français
-    print("1. Films français...")
+    # Filter French films
+    print("1. French films...")
     reader.filter(
-        lambda f: f.get("pays") and "france" in f["pays"].lower(),
-        "films_francais.jsonl",
+        lambda f: f.get("country") and "france" in f["country"].lower(),
+        "films_french.jsonl",
     )
 
-    # Filtrer les films récents (2000+)
-    print("\n2. Films après 2000...")
+    # Filter recent films (2000+)
+    print("\n2. Films after 2000...")
+    reader.filter(lambda f: f.get("year") and f["year"] >= 2000, "films_recent.jsonl")
+
+    # Filter films with actors
+    print("\n3. Films with actors listed...")
     reader.filter(
-        lambda f: f.get("annee") and f["annee"] >= 2000, "films_recents.jsonl"
+        lambda f: f.get("actors") and len(f["actors"]) > 0, "films_with_actors.jsonl"
     )
 
-    # Filtrer les films avec acteurs
-    print("\n3. Films avec acteurs renseignés...")
-    reader.filter(
-        lambda f: f.get("acteurs") and len(f["acteurs"]) > 0, "films_avec_acteurs.jsonl"
-    )
-
-    # ===== ÉTAPE 4: Conversion en JSON standard =====
+    # ===== STEP 4: CONVERSION TO STANDARD JSON (OPTIONAL) =====
     print("\n" + "=" * 60)
-    print("CONVERSION EN JSON STANDARD (optionnel)")
+    print("CONVERSION TO STANDARD JSON (optional)")
     print("=" * 60 + "\n")
 
-    # Convertir seulement les films récents (pour ne pas surcharger la RAM)
-    recent_reader = JSONLinesReader("films_recents.jsonl")
-    recent_reader.to_json("films_recents.json")
+    # Convert only recent films to avoid RAM overload
+    recent_reader = JSONLinesReader("films_recent.jsonl")
+    recent_reader.to_json("films_recent.json")
 
-    print("\n✅ Traitement terminé!")
+    print("\n✅ Processing complete!")
