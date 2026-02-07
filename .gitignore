@@ -1,0 +1,7 @@
+*.xml.bz2
+*.xml
+.venv
+.ruff_cache
+.uv_cache
+*.egg-info
+*jsonl
