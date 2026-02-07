@@ -2,7 +2,7 @@ import bz2
 import json
 import re
 from pathlib import Path
-from typing import Dict, Optional, TextIO
+from typing import Dict, Optional, TextIO, Any
 
 from wiki_dump_reader import Cleaner, iterate
 
@@ -65,7 +65,7 @@ class WikipediaFilmExtractor:
         print(f"  - Output file: {self.output_path}")
         print(f"{'='*60}")
 
-    def _process_page(self, title: str, text: str) -> Optional[Dict]:
+    def _process_page(self, title: str, text: str) -> Optional[dict[str, Any]]:
         """
         Process a single Wikipedia page and extract film data if applicable.
 
@@ -102,7 +102,7 @@ class WikipediaFilmExtractor:
             re.search(pattern, text, re.IGNORECASE) for pattern in infobox_patterns
         )
 
-    def _extract_film_data(self, title: str, text: str) -> Dict:
+    def _extract_film_data(self, title: str, text: str) -> dict[str, Any]:
         """
         Extract structured data from a film article.
 
