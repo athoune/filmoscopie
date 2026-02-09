@@ -1,16 +1,34 @@
 import bz2
 import json
 import re
+from io import StringIO
 from pathlib import Path
-from typing import Dict, Optional, TextIO, Any
+from typing import Dict, Optional, TextIO
 
 from wiki_dump_reader import Cleaner, iterate
+
+
+def titles(txt: str):
+    title = re.compile(r"^(=+) (.*?) (=+)$")
+    poz = 0
+    for i, line in enumerate(StringIO(txt).readlines()):
+        m = title.match(line)
+        if m is not None:
+            assert m[1] == m[3]
+            yield i, poz, m[2]
+        poz += len(line)
 
 
 class WikipediaFilmExtractor:
     """
     Extracts film data from French Wikipedia dump and writes to JSON Lines format.
-    Uses wiki-dump-reader for efficient parsing without loading everything in RAM.
+
+    Extracts:
+    - Basic info (title, director, year, etc.)
+
+    - Synopsis (plot summary)
+    - English title
+    - IMDb ID
     """
 
     def __init__(self, dump_path: str, output_path: str):
@@ -18,6 +36,8 @@ class WikipediaFilmExtractor:
         self.output_path = output_path
         self.films_count = 0
         self.pages_processed = 0
+        self.draft_count = 0
+        self.draft_writer = None
 
         # Initialize wiki cleaner to remove markup
         self.cleaner = Cleaner()
@@ -31,16 +51,11 @@ class WikipediaFilmExtractor:
         print(f"Output file: {self.output_path}")
         print("Starting incremental parsing...\n")
 
+        self.draft_writer = open("films_without_draft.txt", "w")
         # Open output file in write mode
         with open(self.output_path, "w", encoding="utf-8") as output_file:
             # Iterate through pages in the dump
-            # wiki-dump-reader handles decompression and parsing automatically
-            if self.dump_path.endswith(".bz2"):
-                reader = bz2.open(self.dump_path, "rt")
-            else:
-                reader = open(self.dump_path, "r")
-
-            for title, text in iterate(reader):
+            for title, text in iterate(self.dump_path):
                 self.pages_processed += 1
 
                 # Process the page
@@ -58,14 +73,14 @@ class WikipediaFilmExtractor:
                             f"({self.pages_processed:,} pages processed)"
                         )
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("Extraction complete!")
         print(f"  - Pages processed: {self.pages_processed:,}")
         print(f"  - Films extracted: {self.films_count:,}")
         print(f"  - Output file: {self.output_path}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
-    def _process_page(self, title: str, text: str) -> Optional[dict[str, Any]]:
+    def _process_page(self, title: str, text: str) -> Optional[Dict]:
         """
         Process a single Wikipedia page and extract film data if applicable.
 
@@ -80,43 +95,53 @@ class WikipediaFilmExtractor:
         if not self._is_film_article(text):
             return None
 
+        if self._is_draft(text):
+            self.draft_count += 1
+            self.draft_writer.write(
+                f""">>>>>>>>>>>>
+->->-> {title}
+
+{text}
+
+<<<<<<<<<<<<<<<<<<<
+"""
+            )
+            return None
+
         # Extract structured data from the film
         return self._extract_film_data(title, text)
+
+    def _is_draft(self, text: str) -> bool:
+        return text.find("{{ébauche|film") != -1
 
     def _is_film_article(self, text: str) -> bool:
         """
         Detect if the article is about a film by looking for film infoboxes.
-
-        French Wikipedia uses various infobox templates for films:
-        - {{Infobox Cinéma...
-        - {{Infobox Film...
-        - {{Infobox film...
         """
         infobox_patterns = [
-            r"\{\{Infobox Cinéma",
             r"\{\{Infobox Film",
             r"\{\{Infobox film",
         ]
 
+        cine = re.search(r"\{\{Infobox Cinéma.*", text, re.IGNORECASE)
+        # * personnalité
+        # * festival
+        # * film
+        if cine is not None and cine[0].find("(personnalité)") == -1:
+            return True
         return any(
             re.search(pattern, text, re.IGNORECASE) for pattern in infobox_patterns
         )
 
-    def _extract_film_data(self, title: str, text: str) -> dict[str, Any]:
+    def _extract_film_data(self, title: str, text: str) -> Dict:
         """
         Extract structured data from a film article.
 
-        Parses the infobox to extract:
-        - Original title
-        - Director
-        - Year
-        - Country
-        - Genre
-        - Duration
-        - Actors
-        - Writer
-        - Producer
-        - Budget
+        Extracts:
+        - Basic metadata (director, year, country, etc.)
+        - Synopsis/plot summary
+        - English title
+        - IMDb ID
 
         Args:
             title: Film title (page title)
@@ -128,6 +153,7 @@ class WikipediaFilmExtractor:
         film_data = {
             "title": title,
             "original_title": None,
+            "english_title": None,  # NEW
             "director": None,
             "year": None,
             "country": None,
@@ -137,10 +163,10 @@ class WikipediaFilmExtractor:
             "writer": None,
             "producer": None,
             "budget": None,
+            "imdb_id": None,  # NEW
+            "synopsis": None,  # NEW
         }
-
-        # Find the infobox using regex
-        # Matches {{Infobox ... | ... }}
+        # Find the infobox
         infobox_match = re.search(
             r"\{\{Infobox[^}]*?(Cinéma|Film|film)\s*\|?(.*?)\n\}\}",
             text,
@@ -152,8 +178,7 @@ class WikipediaFilmExtractor:
 
         infobox_content = infobox_match.group(2)
 
-        # Define field patterns to extract from infobox
-        # French field names -> English keys
+        # ===== EXTRACT BASIC FIELDS =====
         field_patterns = {
             "original_title": r"titre original\s*=\s*(.+)",
             "director": r"réalisation\s*=\s*(.+)",
@@ -164,18 +189,17 @@ class WikipediaFilmExtractor:
             "budget": r"budget\s*=\s*(.+)",
         }
 
-        # Extract each field
         for field, pattern in field_patterns.items():
             match = re.search(pattern, infobox_content, re.IGNORECASE)
             if match:
                 film_data[field] = self._clean_value(match.group(1))
 
-        # Extract year (special handling for integer)
+        # ===== EXTRACT YEAR =====
         year_match = re.search(r"année\s*=\s*(\d{4})", infobox_content, re.IGNORECASE)
         if year_match:
             film_data["year"] = int(year_match.group(1))
 
-        # Alternative: extract from release date if year not found
+        # Alternative: extract from release date
         if not film_data["year"]:
             date_match = re.search(
                 r"(?:sortie|date)\s*=.*?(\d{4})", infobox_content, re.IGNORECASE
@@ -183,12 +207,12 @@ class WikipediaFilmExtractor:
             if date_match:
                 film_data["year"] = int(date_match.group(1))
 
-        # Extract duration in minutes
+        # ===== EXTRACT DURATION =====
         duration_match = re.search(r"durée\s*=\s*(\d+)", infobox_content, re.IGNORECASE)
         if duration_match:
             film_data["duration_minutes"] = int(duration_match.group(1))
 
-        # Extract actors list
+        # ===== EXTRACT ACTORS =====
         actors_match = re.search(
             r"acteur\s*=\s*(.+?)(?:\n\||\n\}\})",
             infobox_content,
@@ -197,23 +221,148 @@ class WikipediaFilmExtractor:
         if actors_match:
             film_data["actors"] = self._parse_list(actors_match.group(1))
 
+        # ===== EXTRACT ENGLISH TITLE =====
+        # Method 1: Look for "titre anglais" field in infobox
+        english_title_match = re.search(
+            r"titre anglais\s*=\s*(.+)", infobox_content, re.IGNORECASE
+        )
+        if english_title_match:
+            film_data["english_title"] = self._clean_value(english_title_match.group(1))
+
+        # Method 2: Look for interlanguage links (less reliable)
+        if not film_data["english_title"]:
+            # Try to find {{Titre en langue|en|English Title}}
+            lang_title_match = re.search(
+                r"\{\{Titre en langue\|en\|([^}]+)\}\}", text, re.IGNORECASE
+            )
+            if lang_title_match:
+                film_data["english_title"] = self._clean_value(
+                    lang_title_match.group(1)
+                )
+
+        # ===== EXTRACT IMDB ID =====
+        # Method 1: Look for IMDb template {{IMDb titre|id=...}}
+        imdb_template_match = re.search(
+            r"\{\{IMDb\s+titre\s*\|\s*(?:id\s*=\s*)?([a-z]{2}\d+)", text, re.IGNORECASE
+        )
+        if imdb_template_match:
+            film_data["imdb_id"] = imdb_template_match.group(1)
+
+        # Method 2: Look for direct IMDb URL
+        if not film_data["imdb_id"]:
+            imdb_url_match = re.search(r"imdb\.com/title/(tt\d+)", text, re.IGNORECASE)
+            if imdb_url_match:
+                film_data["imdb_id"] = imdb_url_match.group(1)
+
+        # Method 3: Look for "IMDb" or "IMDB" field in infobox or external links section
+        if not film_data["imdb_id"]:
+            imdb_field_match = re.search(
+                r"(?:IMDb|IMDB)\s*=\s*([a-z]{2}\d+)", text, re.IGNORECASE
+            )
+            if imdb_field_match:
+                film_data["imdb_id"] = imdb_field_match.group(1)
+
+        # ===== EXTRACT SYNOPSIS =====
+        film_data["synopsis"] = self._extract_synopsis(text)
+
         return film_data
+
+    def _extract_synopsis(self, text: str) -> Optional[str]:
+        """
+        Extract the synopsis/plot summary from the article.
+
+        French Wikipedia typically has sections like:
+        - == Synopsis ==
+        - == Résumé ==
+        - == Histoire ==
+        - == Intrigue ==
+
+        Args:
+            text: Full article wikitext
+
+        Returns:
+            Cleaned synopsis text or None
+        """
+        # Common section headers for synopsis in French
+        synopsis_patterns = [
+            r"==\s*Synopsis\s*==\s*\n(.*?)(?:\n==|\Z)",
+            r"==\s*Résumé\s*==\s*\n(.*?)(?:\n==|\Z)",
+            r"==\s*Histoire\s*==\s*\n(.*?)(?:\n==|\Z)",
+            r"==\s*Intrigue\s*==\s*\n(.*?)(?:\n==|\Z)",
+            r"==\s*Scénario\s*==\s*\n(.*?)(?:\n==|\Z)",
+        ]
+
+        for pattern in synopsis_patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                synopsis = match.group(1)
+
+                # Clean the synopsis
+                synopsis = self._clean_synopsis(synopsis)
+
+                # Only return if we have substantial content (at least 50 chars)
+                if len(synopsis) >= 50:
+                    return synopsis
+
+        return None
+
+    def _clean_synopsis(self, synopsis: str) -> str:
+        """
+        Clean synopsis text by removing wiki markup and formatting.
+
+        Args:
+            synopsis: Raw synopsis text with wiki markup
+
+        Returns:
+            Cleaned plain text synopsis
+        """
+        # Remove subsection headers (=== ... ===)
+        synopsis = re.sub(r"={2,}.*?={2,}", "", synopsis)
+
+        # Remove wiki links [[Link|Text]] -> Text
+        synopsis = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", synopsis)
+
+        # Remove external links [http://... Text] -> Text
+        synopsis = re.sub(r"\[https?://[^\s\]]+\s+([^\]]+)\]", r"\1", synopsis)
+        synopsis = re.sub(r"\[https?://[^\s\]]+\]", "", synopsis)
+
+        # Remove HTML tags
+        synopsis = re.sub(r"<[^>]+>", "", synopsis)
+
+        # Remove references {{Référence...}} or <ref>...</ref>
+        synopsis = re.sub(r"\{\{[Rr]éférence[^}]*\}\}", "", synopsis)
+        synopsis = re.sub(r"<ref[^>]*>.*?</ref>", "", synopsis, flags=re.DOTALL)
+        synopsis = re.sub(r"<ref[^>]*/?>", "", synopsis)
+
+        # Remove templates {{...}}
+        # This is tricky because templates can be nested
+        # We'll do a simple removal for common cases
+        synopsis = re.sub(r"\{\{[^}]+\}\}", "", synopsis)
+
+        # Remove bold/italic formatting
+        synopsis = re.sub(r"'{2,}", "", synopsis)
+
+        # Remove multiple newlines and spaces
+        synopsis = re.sub(r"\n+", "\n", synopsis)
+        synopsis = re.sub(r" +", " ", synopsis)
+
+        # Remove leading/trailing whitespace
+        synopsis = synopsis.strip()
+
+        # Limit length to avoid huge synopses (max 2000 chars)
+        if len(synopsis) > 2000:
+            # Try to cut at a sentence boundary
+            cutoff = synopsis.rfind(".", 0, 2000)
+            if cutoff > 1000:  # Only cut if we have substantial content
+                synopsis = synopsis[: cutoff + 1]
+            else:
+                synopsis = synopsis[:2000] + "..."
+
+        return synopsis
 
     def _clean_value(self, value: str) -> str:
         """
         Clean extracted value by removing wiki markup and HTML.
-
-        Removes:
-        - Wiki links: [[Link|Text]] -> Text
-        - HTML tags: <tag>content</tag> -> content
-        - References: <ref>...</ref> -> (removed)
-        - Wiki formatting: '''bold''' -> bold
-
-        Args:
-            value: Raw extracted value
-
-        Returns:
-            Cleaned string
         """
         value = value.strip()
 
@@ -223,11 +372,11 @@ class WikipediaFilmExtractor:
         # Remove HTML tags
         value = re.sub(r"<[^>]+>", "", value)
 
-        # Remove references <ref>...</ref>
+        # Remove references
         value = re.sub(r"<ref[^>]*>.*?</ref>", "", value, flags=re.DOTALL)
         value = re.sub(r"<ref[^>]*/?>", "", value)
 
-        # Remove wiki formatting (bold, italic)
+        # Remove wiki formatting
         value = re.sub(r"'{2,}", "", value)
 
         # Clean multiple spaces
@@ -238,17 +387,6 @@ class WikipediaFilmExtractor:
     def _parse_list(self, text: str) -> list:
         """
         Parse a list of items (actors, etc.) from wiki text.
-
-        Handles:
-        - Bullet lists: * Item
-        - Line breaks
-        - Comma separated values
-
-        Args:
-            text: Raw list text
-
-        Returns:
-            List of cleaned items (max 10)
         """
         text = self._clean_value(text)
 
@@ -259,24 +397,17 @@ class WikipediaFilmExtractor:
         cleaned_items = []
         for item in items:
             item = item.strip()
-            # Remove leading bullets or dashes
             item = re.sub(r"^\*+\s*", "", item)
             item = re.sub(r"^-+\s*", "", item)
 
-            # Only keep non-empty items
             if item and len(item) > 1:
                 cleaned_items.append(item)
 
-        # Limit to 10 items to avoid huge lists
         return cleaned_items[:10]
 
     def _write_jsonl(self, file: TextIO, data: Dict):
         """
-        Write a single JSON object as a line to the file (JSON Lines format).
-
-        Args:
-            file: Open file handle
-            data: Dictionary to write
+        Write a single JSON object as a line to the file.
         """
         json_line = json.dumps(data, ensure_ascii=False)
         file.write(json_line + "\n")
@@ -285,20 +416,13 @@ class WikipediaFilmExtractor:
 class JSONLinesReader:
     """
     Utility class to read and manipulate JSON Lines files efficiently.
-    Allows streaming processing without loading everything into memory.
     """
 
     def __init__(self, filepath: str):
         self.filepath = filepath
 
     def read_all(self) -> list:
-        """
-        Read all films into memory.
-        WARNING: Use only for small files or you'll run out of RAM!
-
-        Returns:
-            List of all film dictionaries
-        """
+        """Read all films into memory (use carefully!)"""
         films = []
         with open(self.filepath, "r", encoding="utf-8") as f:
             for line in f:
@@ -306,23 +430,13 @@ class JSONLinesReader:
         return films
 
     def iterate(self):
-        """
-        Iterate over films one at a time (memory efficient).
-
-        Yields:
-            Film dictionary for each line
-        """
+        """Iterate over films one at a time (memory efficient)"""
         with open(self.filepath, "r", encoding="utf-8") as f:
             for line in f:
                 yield json.loads(line)
 
     def count(self) -> int:
-        """
-        Count total number of films in the file.
-
-        Returns:
-            Number of lines (films)
-        """
+        """Count total number of films"""
         count = 0
         with open(self.filepath, "r", encoding="utf-8") as f:
             for _ in f:
@@ -330,15 +444,7 @@ class JSONLinesReader:
         return count
 
     def sample(self, n: int = 10) -> list:
-        """
-        Get the first n films.
-
-        Args:
-            n: Number of films to retrieve
-
-        Returns:
-            List of first n films
-        """
+        """Get the first n films"""
         films = []
         with open(self.filepath, "r", encoding="utf-8") as f:
             for i, line in enumerate(f):
@@ -348,16 +454,7 @@ class JSONLinesReader:
         return films
 
     def filter(self, condition, output_path: str):
-        """
-        Filter films based on a condition and write to new file.
-
-        Args:
-            condition: Function that takes a film dict and returns bool
-            output_path: Path to write filtered results
-
-        Returns:
-            Number of films that matched the condition
-        """
+        """Filter films based on condition and write to new file"""
         count = 0
         with open(self.filepath, "r", encoding="utf-8") as infile:
             with open(output_path, "w", encoding="utf-8") as outfile:
@@ -370,17 +467,54 @@ class JSONLinesReader:
         return count
 
     def to_json(self, output_path: str):
-        """
-        Convert JSON Lines to standard JSON array format.
-        WARNING: Loads everything into memory!
-
-        Args:
-            output_path: Path to write JSON array
-        """
+        """Convert JSON Lines to standard JSON array"""
         films = self.read_all()
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(films, f, ensure_ascii=False, indent=2)
         print(f"Converted to JSON: {output_path}")
+
+    def get_statistics(self):
+        """
+        Calculate statistics about the extracted data.
+
+        Returns:
+            Dictionary with statistics
+        """
+        stats = {
+            "total": 0,
+            "with_synopsis": 0,
+            "with_imdb_id": 0,
+            "with_english_title": 0,
+            "with_year": 0,
+            "with_director": 0,
+            "avg_synopsis_length": 0,
+        }
+
+        synopsis_lengths = []
+
+        for film in self.iterate():
+            stats["total"] += 1
+
+            if film.get("synopsis"):
+                stats["with_synopsis"] += 1
+                synopsis_lengths.append(len(film["synopsis"]))
+
+            if film.get("imdb_id"):
+                stats["with_imdb_id"] += 1
+
+            if film.get("english_title"):
+                stats["with_english_title"] += 1
+
+            if film.get("year"):
+                stats["with_year"] += 1
+
+            if film.get("director"):
+                stats["with_director"] += 1
+
+        if synopsis_lengths:
+            stats["avg_synopsis_length"] = sum(synopsis_lengths) / len(synopsis_lengths)
+
+        return stats
 
 
 # =============================================================================
@@ -400,66 +534,101 @@ if __name__ == "__main__":
     if not Path(dump_file).exists():
         print(f"⚠️  Dump file not found: {dump_file}")
         print("Download from: https://dumps.wikimedia.org/frwiki/latest/")
-        print("Example: frwiki-latest-pages-articles.xml.bz2")
         exit(1)
 
     # Create extractor and start parsing
-    extractor = WikipediaFilmExtractor(dump_file, output_file)
+    extractor = WikipediaFilmExtractor(bz2.open(dump_file, "rt"), output_file)
     extractor.parse_dump()
 
-    # ===== STEP 2: USING THE JSON LINES FILE =====
+    # ===== STEP 2: DISPLAY SAMPLES =====
     print("\n" + "=" * 60)
-    print("USING THE JSON LINES FILE")
+    print("SAMPLE EXTRACTED FILMS")
     print("=" * 60 + "\n")
 
     reader = JSONLinesReader(output_file)
 
-    # Count films
-    total = reader.count()
-    print(f"Total films in file: {total:,}\n")
+    # Show detailed samples
+    for i, film in enumerate(reader.sample(3), 1):
+        print(f"Film #{i}: {film['title']}")
+        print("-" * 60)
 
-    # Display some examples
-    print("Sample films extracted:")
-    print("-" * 60)
-    for i, film in enumerate(reader.sample(5), 1):
-        print(f"{i}. {film['title']}")
-        if film["year"]:
-            print(f"   Year: {film['year']}")
-        if film["director"]:
-            print(f"   Director: {film['director']}")
-        if film["genre"]:
-            print(f"   Genre: {film['genre']}")
-        print()
+        if film.get("english_title"):
+            print(f"English title: {film['english_title']}")
 
-    # ===== STEP 3: FILTERING EXAMPLES =====
+        if film.get("year"):
+            print(f"Year: {film['year']}")
+
+        if film.get("director"):
+            print(f"Director: {film['director']}")
+
+        if film.get("imdb_id"):
+            print(f"IMDb ID: {film['imdb_id']}")
+            print(f"IMDb URL: https://www.imdb.com/title/{film['imdb_id']}/")
+
+        if film.get("synopsis"):
+            synopsis_preview = film["synopsis"][:200]
+            if len(film["synopsis"]) > 200:
+                synopsis_preview += "..."
+            print(f"\nSynopsis ({len(film['synopsis'])} chars):")
+            print(f"  {synopsis_preview}")
+
+        print("\n")
+
+    # ===== STEP 3: STATISTICS =====
     print("=" * 60)
+    print("EXTRACTION STATISTICS")
+    print("=" * 60 + "\n")
+
+    stats = reader.get_statistics()
+
+    print(f"Total films: {stats['total']:,}")
+    # Only show percentages if we have films
+    if stats["total"] > 0:
+        print("\nData completeness:")
+        print(
+            f"  - With synopsis: {stats['with_synopsis']:,} ({stats['with_synopsis'] / stats['total'] * 100:.1f}%)"
+        )
+        print(
+            f"  - With IMDb ID: {stats['with_imdb_id']:,} ({stats['with_imdb_id'] / stats['total'] * 100:.1f}%)"
+        )
+        print(
+            f"  - With English title: {stats['with_english_title']:,} ({stats['with_english_title'] / stats['total'] * 100:.1f}%)"
+        )
+        print(
+            f"  - With year: {stats['with_year']:,} ({stats['with_year'] / stats['total'] * 100:.1f}%)"
+        )
+        print(
+            f"  - With director: {stats['with_director']:,} ({stats['with_director'] / stats['total'] * 100:.1f}%)"
+        )
+
+    if stats["avg_synopsis_length"] > 0:
+        print(
+            f"\nAverage synopsis length: {stats['avg_synopsis_length']:.0f} characters"
+        )
+
+    # ===== STEP 4: FILTERING EXAMPLES =====
+    print("\n" + "=" * 60)
     print("FILTERING EXAMPLES")
     print("=" * 60 + "\n")
 
-    # Filter French films
-    print("1. French films...")
+    # Films with complete IMDb data
+    print("1. Films with IMDb ID...")
+    reader.filter(lambda f: f.get("imdb_id") is not None, "films_with_imdb.jsonl")
+
+    # Films with synopsis
+    print("\n2. Films with synopsis...")
+    reader.filter(lambda f: f.get("synopsis") is not None, "films_with_synopsis.jsonl")
+
+    # Recent films with complete data
+    print("\n3. Recent films (2010+) with complete data...")
     reader.filter(
-        lambda f: f.get("country") and "france" in f["country"].lower(),
-        "films_french.jsonl",
+        lambda f: (
+            f.get("year")
+            and f["year"] >= 2010
+            and f.get("synopsis")
+            and f.get("imdb_id")
+        ),
+        "films_recent_complete.jsonl",
     )
-
-    # Filter recent films (2000+)
-    print("\n2. Films after 2000...")
-    reader.filter(lambda f: f.get("year") and f["year"] >= 2000, "films_recent.jsonl")
-
-    # Filter films with actors
-    print("\n3. Films with actors listed...")
-    reader.filter(
-        lambda f: f.get("actors") and len(f["actors"]) > 0, "films_with_actors.jsonl"
-    )
-
-    # ===== STEP 4: CONVERSION TO STANDARD JSON (OPTIONAL) =====
-    print("\n" + "=" * 60)
-    print("CONVERSION TO STANDARD JSON (optional)")
-    print("=" * 60 + "\n")
-
-    # Convert only recent films to avoid RAM overload
-    recent_reader = JSONLinesReader("films_recent.jsonl")
-    recent_reader.to_json("films_recent.json")
 
     print("\n✅ Processing complete!")
