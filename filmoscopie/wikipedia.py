@@ -535,7 +535,7 @@ def movies_documents() -> tuple[
             text = movie["synopsis"]
             payload = dict(
                 title=movie["title"],
-                genre=movie["genre"],
+                genre=[a.strip() for a in movie["genre"].split((","))],
                 duration=movie["duration_minutes"],
             )
             yield i, text, payload
