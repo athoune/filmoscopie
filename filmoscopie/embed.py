@@ -42,7 +42,7 @@ class Embed:
     ):
         for batch in tqdm(
             batched(documents, batch_size),
-            total=total_size,
+            total=total_size / batch_size,
             unit=f"{batch_size} movies",
         ):
             texts = [i[1] for i in batch if i[1] is not None]
