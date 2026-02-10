@@ -5,3 +5,7 @@
 .uv_cache
 *.egg-info
 *jsonl
+qdrant_storage/
+.devcontainer/
+.sentence_transformers_cache/
+__pycache__
