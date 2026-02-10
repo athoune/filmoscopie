@@ -45,8 +45,8 @@ class Embed:
             total=total_size / batch_size,
             unit=f"{batch_size} movies",
         ):
-            texts = [i[1] for i in batch if i[1] is not None]
-            embeding: np.ndarray = self.model.encode(texts)
+            batch = [i for i in batch if i[1] is not None]
+            embeding: np.ndarray = self.model.encode([i[1] for i in batch])
             # 6. Insert into Qdrant
             points = [
                 PointStruct(id=id_, vector=embeding[i], payload=payload)
