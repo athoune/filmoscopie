@@ -3,7 +3,7 @@ import json
 import re
 from io import StringIO
 from pathlib import Path
-from typing import Dict, Optional, TextIO
+from typing import Dict, Optional, TextIO, Any, Generator
 
 from wiki_dump_reader import Cleaner, iterate
 
@@ -515,6 +515,36 @@ class JSONLinesReader:
             stats["avg_synopsis_length"] = sum(synopsis_lengths) / len(synopsis_lengths)
 
         return stats
+
+
+def _movie_document(movie: dict[str, Any]) -> tuple[str | int, str, dict[str, Any]]:
+    id_ = f"{movie['title']} {movie['year']}"
+    text = movie["synopsis"]
+    payload = dict(genre=movie["genre"], duration=movie["duration_minutes"])
+    return id_, text, payload
+
+
+def movies_documents() -> tuple[
+    Generator[tuple[int, str, dict[str, Any]], None, None], int
+]:
+    movies = JSONLinesReader("films_wikipedia.jsonl")
+
+    def _loop():
+        i = 0
+        for movie in movies.iterate():
+            text = movie["synopsis"]
+            payload = dict(
+                title=movie["title"],
+                genre=movie["genre"],
+                duration=movie["duration_minutes"],
+            )
+            yield i, text, payload
+            i += 1
+
+    return (
+        _loop(),
+        movies.count(),
+    )
 
 
 # =============================================================================
