@@ -1,12 +1,17 @@
 from collections.abc import Iterable
+from itertools import batched
+from typing import Any
+
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
+from wikipedia import movies_documents
 
 
 class Embed:
-    def __init__(self, address: str = "localhost:6333"):
+    def __init__(self, host: str = "localhost", port: int = 6333):
         self.collection_name = "documents_fr"
         # 1. Initialize the embedding model
         # Option 1: Optimized multilingual model
@@ -16,70 +21,56 @@ class Embed:
         # model = SentenceTransformer('dangvantuan/sentence-camembert-large')
 
         # 2. Initialize Qdrant client
-        host, port = address.split(":")
-        self.client = QdrantClient(host=host, port=int(port))
+        self.client = QdrantClient(host=host, port=port)
         # Or for Qdrant Cloud: client = QdrantClient(url="your-url", api_key="your-key")
 
     def create_db(self):
         # 3. Create a collection
         vector_size = self.model.get_sentence_embedding_dimension()
 
-        self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-        )
+        if not self.client.collection_exists(self.collection_name):
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+            )
 
-    def upsert(self, documents: Iterable[str]):
-        # 4. Prepare your documents
-        """
-        documents = [
-            "La tour Eiffel est un monument emblématique de Paris.",
-            "Le fromage français est réputé dans le monde entier.",
-            "L'intelligence artificielle transforme notre société.",
-        ]
-        """
+    def upsert(
+        self,
+        documents: Iterable[tuple[int, str, dict[str, Any]]],
+        total_size: int,
+        batch_size: int = 100,
+    ):
+        for batch in tqdm(
+            batched(documents, batch_size),
+            total=total_size,
+            unit=f"{batch_size} movies",
+        ):
+            texts = [i[1] for i in batch if i[1] is not None]
+            embeding: np.ndarray = self.model.encode(texts)
+            # 6. Insert into Qdrant
+            points = [
+                PointStruct(id=id_, vector=embeding[i], payload=payload)
+                for i, (id_, text, payload) in enumerate(batch)
+            ]
 
-        # 5. Generate embeddings
-        embeddings = self.model.encode(documents)
+            self.client.upsert(
+                collection_name=self.collection_name, points=points, wait=False
+            )
 
-        # 6. Insert into Qdrant
-        points = [
-            PointStruct(id=idx, vector=embedding.tolist(), payload={"text": doc})
-            for idx, (doc, embedding) in enumerate(zip(documents, embeddings))
-        ]
-
-        self.client.upsert(collection_name=self.collection_name, points=points)
-
-    def query(self, query: str):
+    def query(self, query: str, score_threshold: float = 0.5):
         # 7. Semantic search
-        """
-        query = "monuments parisiens"
-        """
         query_vector = self.model.encode(query)
-        print(query_vector)
 
         search_result = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector.tolist(),
             limit=3,
+            score_threshold=score_threshold,
         )
         return search_result
 
-        """
-        for result in search_result:
-            print(f"Score: {result.score:.4f} - {result.payload['text']}")
-        """
-
 
 if __name__ == "__main__":
-    embed = Embed("192.168.1.35:6333")
-    """
+    embed = Embed("192.168.1.35")
     embed.create_db()
-    documents = [
-        "La tour Eiffel est un monument emblématique de Paris.",
-        "Le fromage français est réputé dans le monde entier.",
-        "L'intelligence artificielle transforme notre société.",
-    ]
-    embed.upsert(documents)
-    """
-    print(embed.query("monuments parisiens"))
+    embed.upsert(*movies_documents())
