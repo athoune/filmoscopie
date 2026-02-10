@@ -71,6 +71,8 @@ class Embed:
 
 
 if __name__ == "__main__":
-    embed = Embed("192.168.1.35")
+    import os
+
+    embed = Embed(os.getenv("QDRANT_HOST", "192.168.1.35"))
     embed.create_db()
     embed.upsert(*movies_documents())
