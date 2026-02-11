@@ -15,7 +15,7 @@ class Embed:
         self.collection_name = "documents_fr"
         # 1. Initialize the embedding model
         # Option 1: Optimized multilingual model
-        self.model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        self.model = SentenceTransformer("dangvantuan/sentence-camembert-base")
 
         # Option 2: CamemBERT via sentence-transformers (if available)
         # model = SentenceTransformer('dangvantuan/sentence-camembert-large')
