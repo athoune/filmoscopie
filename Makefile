@@ -15,6 +15,6 @@ docker-dev:
 		filmoscopie bash
 
 qdrant:
-	docker run -p 6333:6333 -p 6334:6334 \
+	docker run -p 172.17.0.1:6333:6333 -p 172.17.0.1:6334:6334 \
     -v "`pwd`/qdrant_storage:/qdrant/storage:z" \
     qdrant/qdrant
