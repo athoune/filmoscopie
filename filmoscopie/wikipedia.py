@@ -533,10 +533,15 @@ def movies_documents() -> tuple[
         i = 0
         for movie in movies.iterate():
             text = movie["synopsis"]
+            genre = movie["genre"]
+            if genre is None:
+                genres = []
+            else:
+                genres = [a.strip().lower() for a in genre.split((","))]
             m = movie["title"].replace("(film)", "").strip()
             payload = dict(
                 title=f"{m} {movie['year']}",
-                genre=[a.strip().lower() for a in movie["genre"].split((","))],
+                genre=genres,
                 duration=movie["duration_minutes"],
                 year=movie["year"],
                 imdb=movie["imdb_id"],
