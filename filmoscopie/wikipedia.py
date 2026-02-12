@@ -5,6 +5,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Dict, Optional, TextIO, Any, Generator
 
+import zstandard as zstd
 from wiki_dump_reader import Cleaner, iterate
 
 
@@ -31,8 +32,8 @@ class WikipediaFilmExtractor:
     - IMDb ID
     """
 
-    def __init__(self, dump_path: str, output_path: str):
-        self.dump_path = dump_path
+    def __init__(self, dump_source: TextIO, output_path: str):
+        self.dump_source = dump_source
         self.output_path = output_path
         self.films_count = 0
         self.pages_processed = 0
@@ -80,36 +81,12 @@ class WikipediaFilmExtractor:
         print(f"  - Output file: {self.output_path}")
         print(f"{'=' * 60}")
 
-    def _process_page(self, title: str, text: str) -> Optional[Dict]:
-        """
-        Process a single Wikipedia page and extract film data if applicable.
-
-        Args:
-            title: Page title
-            text: Page wikitext content
-
-        Returns:
-            Dictionary with film data or None if not a film article
-        """
-        # Check if this is a film article
-        if not self._is_film_article(text):
-            return None
-
-        if self._is_draft(text):
-            self.draft_count += 1
-            self.draft_writer.write(
-                f""">>>>>>>>>>>>
-->->-> {title}
-
-{text}
-
-<<<<<<<<<<<<<<<<<<<
-"""
-            )
-            return None
-
-        # Extract structured data from the film
-        return self._extract_film_data(title, text)
+    def _pages(self) -> Generator[tuple[str, str], None, None]:
+        # Iterate through pages in the dump
+        for title, text in iterate(self.dump_source):
+            self.pages_processed += 1
+            if self._is_film_article(text) and not self._is_draft(text):
+                yield title, text
 
     def _is_draft(self, text: str) -> bool:
         return text.find("{{ébauche|film") != -1
