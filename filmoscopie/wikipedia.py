@@ -1,15 +1,23 @@
 import bz2
 import json
 import re
+import sqlite3
 from io import StringIO
 from pathlib import Path
+from hashlib import sha256
 from typing import Dict, Optional, TextIO, Any, Generator
+from itertools import batched
+import time
+import io
 
 import zstandard as zstd
 from wiki_dump_reader import Cleaner, iterate
 
+DB_NAME = "wikipedia.db"
+
 
 def titles(txt: str):
+    "Find all titles in a page using the Wikipedia markup."
     title = re.compile(r"^(=+) (.*?) (=+)$")
     poz = 0
     for i, line in enumerate(StringIO(txt).readlines()):
@@ -18,6 +26,15 @@ def titles(txt: str):
             assert m[1] == m[3]
             yield i, poz, m[2]
         poz += len(line)
+
+
+def hashes(*args) -> tuple[str, ...]:
+    r: list[str] = [""] * len(args)
+    for i, data in enumerate(args):
+        m = sha256()
+        m.update(data.encode())
+        r[i] = m.hexdigest()
+    return tuple(r)
 
 
 class WikipediaFilmExtractor:
@@ -39,41 +56,111 @@ class WikipediaFilmExtractor:
         self.pages_processed = 0
         self.draft_count = 0
         self.draft_writer = None
+        self._init_db()
 
         # Initialize wiki cleaner to remove markup
         self.cleaner = Cleaner()
+
+    def _init_db(self):
+        self.con: sqlite3.Connection = sqlite3.connect(DB_NAME)
+        cur: sqlite3.Cursor = self.con.cursor()
+        for sql in [
+            """CREATE TABLE IF NOT EXISTS
+                movie(id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                title_hash TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                data JSONB,
+                mtime FLOAT NOT NULL);
+            """,
+            "CREATE INDEX IF NOT EXISTS movie_title_hash ON movie(title_hash)",
+        ]:
+            cur.execute(sql)
+        max_id: int | None = cur.execute("SELECT max(id) from movie").fetchone()[0]
+        self.max_id: int = 0 if max_id is None else max_id
 
     def parse_dump(self):
         """
         Parse the Wikipedia dump incrementally and write films to JSON Lines.
         Memory efficient: processes one page at a time.
         """
-        print(f"Opening dump: {self.dump_path}")
+        print(f"Opening dump: {self.dump_source}")
         print(f"Output file: {self.output_path}")
         print("Starting incremental parsing...\n")
 
         self.draft_writer = open("films_without_draft.txt", "w")
-        # Open output file in write mode
-        with open(self.output_path, "w", encoding="utf-8") as output_file:
-            # Iterate through pages in the dump
-            for title, text in iterate(self.dump_path):
-                self.pages_processed += 1
-
-                # Process the page
-                film_data = self._process_page(title, text)
-
-                # If it's a film, write it immediately to the file
-                if film_data:
-                    self._write_jsonl(output_file, film_data)
-                    self.films_count += 1
-
-                    # Display progress every 100 films
-                    if self.films_count % 100 == 0:
-                        print(
-                            f"✓ {self.films_count} films extracted "
-                            f"({self.pages_processed:,} pages processed)"
+        cursor = self.con.cursor()
+        current_id = self.max_id
+        chrono = time.time_ns()
+        mtime = time.time()
+        for batch in batched(self._pages(), 50):
+            title_hashes = [hashes(t)[0] for t, _ in batch]
+            cursor.execute(
+                # FIXME no template in SQL
+                "SELECT title_hash, text_hash FROM movie WHERE title_hash IN (%s);"
+                % ",".join(f"'{t}'" for t in title_hashes),
+            )
+            r = cursor.fetchall()
+            if r is None:
+                olds = dict[str, str]()
+            else:
+                olds = dict[str, str](r)
+            for title, text in batch:
+                title_hash, text_hash = hashes(title, text)
+                old_text_hash = olds.get(title_hash)
+                if old_text_hash == text_hash:
+                    cursor.execute(
+                        "UPDATE movie SET mtime=:mtime WHERE title_hash=:id",
+                        dict(mtime=mtime, id=title_hash),
+                    )
+                else:
+                    film = self._extract_film_data(title, text)
+                    if old_text_hash is None:  # New movie
+                        current_id += 1
+                        id_ = current_id
+                        cursor.execute(
+                            """INSERT INTO
+                                    movie(id, title, title_hash, text_hash, data, mtime)
+                                VALUES(:id, :title, :title_hash, :text_hash, :data, :mtime);""",
+                            dict(
+                                id=id_,
+                                title=title,
+                                title_hash=title_hash,
+                                text_hash=text_hash,
+                                data=json.dumps(film),
+                                mtime=mtime,
+                            ),
+                        )
+                    else:
+                        # Modified movie
+                        cursor.execute(
+                            """UPDATE movie
+                                SET text_hash=':text_hash'
+                                SET data = jsonb(:data)
+                                SET mtime = :mtime
+                                WHERE title_hash=:id;""",
+                            dict(
+                                id=title_hash,
+                                text_hash=text_hash,
+                                data=json.dumps(film),
+                                mtime=mtime,
+                            ),
                         )
 
+                self.films_count += 1
+
+                # Display progress every 100 films
+                if self.films_count % 100 == 0:
+                    now = time.time_ns()
+                    print(
+                        f"✓ {self.films_count} films extracted "
+                        f"({self.pages_processed:,} pages processed) in "
+                        f"{(now - chrono) / 10**9:.2f}s"
+                    )
+                    chrono = now
+            self.con.commit()
+
+        self.con.commit()
         print(f"\n{'=' * 60}")
         print("Extraction complete!")
         print(f"  - Pages processed: {self.pages_processed:,}")
@@ -110,7 +197,7 @@ class WikipediaFilmExtractor:
             re.search(pattern, text, re.IGNORECASE) for pattern in infobox_patterns
         )
 
-    def _extract_film_data(self, title: str, text: str) -> Dict:
+    def _extract_film_data(self, title: str, text: str) -> dict[str, Any]:
         """
         Extract structured data from a film article.
 
@@ -390,110 +477,6 @@ class WikipediaFilmExtractor:
         file.write(json_line + "\n")
 
 
-class JSONLinesReader:
-    """
-    Utility class to read and manipulate JSON Lines files efficiently.
-    """
-
-    def __init__(self, filepath: str):
-        self.filepath = filepath
-
-    def read_all(self) -> list:
-        """Read all films into memory (use carefully!)"""
-        films = []
-        with open(self.filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                films.append(json.loads(line))
-        return films
-
-    def iterate(self):
-        """Iterate over films one at a time (memory efficient)"""
-        with open(self.filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                yield json.loads(line)
-
-    def count(self) -> int:
-        """Count total number of films"""
-        count = 0
-        with open(self.filepath, "r", encoding="utf-8") as f:
-            for _ in f:
-                count += 1
-        return count
-
-    def sample(self, n: int = 10) -> list:
-        """Get the first n films"""
-        films = []
-        with open(self.filepath, "r", encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if i >= n:
-                    break
-                films.append(json.loads(line))
-        return films
-
-    def filter(self, condition, output_path: str):
-        """Filter films based on condition and write to new file"""
-        count = 0
-        with open(self.filepath, "r", encoding="utf-8") as infile:
-            with open(output_path, "w", encoding="utf-8") as outfile:
-                for line in infile:
-                    film = json.loads(line)
-                    if condition(film):
-                        outfile.write(line)
-                        count += 1
-        print(f"Filtered: {count} films written to {output_path}")
-        return count
-
-    def to_json(self, output_path: str):
-        """Convert JSON Lines to standard JSON array"""
-        films = self.read_all()
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(films, f, ensure_ascii=False, indent=2)
-        print(f"Converted to JSON: {output_path}")
-
-    def get_statistics(self):
-        """
-        Calculate statistics about the extracted data.
-
-        Returns:
-            Dictionary with statistics
-        """
-        stats = {
-            "total": 0,
-            "with_synopsis": 0,
-            "with_imdb_id": 0,
-            "with_english_title": 0,
-            "with_year": 0,
-            "with_director": 0,
-            "avg_synopsis_length": 0,
-        }
-
-        synopsis_lengths = []
-
-        for film in self.iterate():
-            stats["total"] += 1
-
-            if film.get("synopsis"):
-                stats["with_synopsis"] += 1
-                synopsis_lengths.append(len(film["synopsis"]))
-
-            if film.get("imdb_id"):
-                stats["with_imdb_id"] += 1
-
-            if film.get("english_title"):
-                stats["with_english_title"] += 1
-
-            if film.get("year"):
-                stats["with_year"] += 1
-
-            if film.get("director"):
-                stats["with_director"] += 1
-
-        if synopsis_lengths:
-            stats["avg_synopsis_length"] = sum(synopsis_lengths) / len(synopsis_lengths)
-
-        return stats
-
-
 def _movie_document(movie: dict[str, Any]) -> tuple[str | int, str, dict[str, Any]]:
     id_ = f"{movie['title']} {movie['year']}"
     text = movie["synopsis"]
@@ -504,21 +487,20 @@ def _movie_document(movie: dict[str, Any]) -> tuple[str | int, str, dict[str, An
 def movies_documents() -> tuple[
     Generator[tuple[int, str, dict[str, Any]], None, None], int
 ]:
-    movies = JSONLinesReader("films_wikipedia.jsonl")
+    connection = sqlite3.connect(DB_NAME)
+    cursor = connection.cursor()
+    cursor.execute("SELECT count(*) FROM movie")
+    (total,) = cursor.fetchone()
 
     def _loop():
         i = 0
-        for movie in movies.iterate():
-            text = movie["synopsis"]
-            genre = movie["genre"]
-            if genre is None:
-                genres = []
-            else:
-                genres = [a.strip().lower() for a in genre.split((","))]
-            m = movie["title"].replace("(film)", "").strip()
+        cursor.execute("SELECT id, title, json(data) FROM movie")
+        for id_, title, movie in cursor:
+            movie = json.loads(movie)
+            text: str = movie["synopsis"]
             payload = dict(
-                title=f"{m} {movie['year']}",
-                genre=genres,
+                title=f"{title} {movie['year']}",
+                genre=movie["genre"],
                 duration=movie["duration_minutes"],
                 year=movie["year"],
                 imdb=movie["imdb_id"],
@@ -528,8 +510,17 @@ def movies_documents() -> tuple[
 
     return (
         _loop(),
-        movies.count(),
+        total,
     )
+
+
+def zstd_line_reader(source: str) -> Generator[str, None, None]:
+    with open(source, "rb") as f:
+        dctx = zstd.ZstdDecompressor()
+        with dctx.stream_reader(f) as reader:
+            text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+            for line in text_reader:
+                yield line
 
 
 # =============================================================================
@@ -537,113 +528,27 @@ def movies_documents() -> tuple[
 # =============================================================================
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     # ===== STEP 1: EXTRACTION =====
     print("=" * 60)
     print("EXTRACTING FILMS FROM WIKIPEDIA DUMP")
     print("=" * 60 + "\n")
 
-    dump_file = "frwiki-latest-pages-articles.xml.bz2"
+    dump_file = "frwiki-latest-pages-articles.xml"
     output_file = "films_wikipedia.jsonl"
 
-    # Check if dump file exists
-    if not Path(dump_file).exists():
+    # Create extractor and start parsing
+
+    if Path(f"{dump_file}.zstd").exists():
+        source = zstd_line_reader(f"{dump_file}.zstd")
+    elif Path(f"{dump_file}.bz2").exists():
+        source = bz2.open(f"{dump_file}.bz2", "rt")
+    else:
         print(f"⚠️  Dump file not found: {dump_file}")
         print("Download from: https://dumps.wikimedia.org/frwiki/latest/")
         exit(1)
-
-    # Create extractor and start parsing
-    extractor = WikipediaFilmExtractor(bz2.open(dump_file, "rt"), output_file)
+    extractor = WikipediaFilmExtractor(source, output_file)
     extractor.parse_dump()
-
-    # ===== STEP 2: DISPLAY SAMPLES =====
-    print("\n" + "=" * 60)
-    print("SAMPLE EXTRACTED FILMS")
-    print("=" * 60 + "\n")
-
-    reader = JSONLinesReader(output_file)
-
-    # Show detailed samples
-    for i, film in enumerate(reader.sample(3), 1):
-        print(f"Film #{i}: {film['title']}")
-        print("-" * 60)
-
-        if film.get("english_title"):
-            print(f"English title: {film['english_title']}")
-
-        if film.get("year"):
-            print(f"Year: {film['year']}")
-
-        if film.get("director"):
-            print(f"Director: {film['director']}")
-
-        if film.get("imdb_id"):
-            print(f"IMDb ID: {film['imdb_id']}")
-            print(f"IMDb URL: https://www.imdb.com/title/{film['imdb_id']}/")
-
-        if film.get("synopsis"):
-            synopsis_preview = film["synopsis"][:200]
-            if len(film["synopsis"]) > 200:
-                synopsis_preview += "..."
-            print(f"\nSynopsis ({len(film['synopsis'])} chars):")
-            print(f"  {synopsis_preview}")
-
-        print("\n")
-
-    # ===== STEP 3: STATISTICS =====
-    print("=" * 60)
-    print("EXTRACTION STATISTICS")
-    print("=" * 60 + "\n")
-
-    stats = reader.get_statistics()
-
-    print(f"Total films: {stats['total']:,}")
-    # Only show percentages if we have films
-    if stats["total"] > 0:
-        print("\nData completeness:")
-        print(
-            f"  - With synopsis: {stats['with_synopsis']:,} ({stats['with_synopsis'] / stats['total'] * 100:.1f}%)"
-        )
-        print(
-            f"  - With IMDb ID: {stats['with_imdb_id']:,} ({stats['with_imdb_id'] / stats['total'] * 100:.1f}%)"
-        )
-        print(
-            f"  - With English title: {stats['with_english_title']:,} ({stats['with_english_title'] / stats['total'] * 100:.1f}%)"
-        )
-        print(
-            f"  - With year: {stats['with_year']:,} ({stats['with_year'] / stats['total'] * 100:.1f}%)"
-        )
-        print(
-            f"  - With director: {stats['with_director']:,} ({stats['with_director'] / stats['total'] * 100:.1f}%)"
-        )
-
-    if stats["avg_synopsis_length"] > 0:
-        print(
-            f"\nAverage synopsis length: {stats['avg_synopsis_length']:.0f} characters"
-        )
-
-    # ===== STEP 4: FILTERING EXAMPLES =====
-    print("\n" + "=" * 60)
-    print("FILTERING EXAMPLES")
-    print("=" * 60 + "\n")
-
-    # Films with complete IMDb data
-    print("1. Films with IMDb ID...")
-    reader.filter(lambda f: f.get("imdb_id") is not None, "films_with_imdb.jsonl")
-
-    # Films with synopsis
-    print("\n2. Films with synopsis...")
-    reader.filter(lambda f: f.get("synopsis") is not None, "films_with_synopsis.jsonl")
-
-    # Recent films with complete data
-    print("\n3. Recent films (2010+) with complete data...")
-    reader.filter(
-        lambda f: (
-            f.get("year")
-            and f["year"] >= 2010
-            and f.get("synopsis")
-            and f.get("imdb_id")
-        ),
-        "films_recent_complete.jsonl",
-    )
 
     print("\n✅ Processing complete!")
