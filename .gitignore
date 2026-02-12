@@ -1,4 +1,5 @@
 *.xml.bz2
+*.xml.zstd
 *.xml
 .venv
 .ruff_cache
@@ -9,3 +10,5 @@ qdrant_storage/
 .devcontainer/
 .sentence_transformers_cache/
 __pycache__
+.ipynb_checkpoints/
+wikipedia.db
