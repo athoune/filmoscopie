@@ -215,7 +215,7 @@ class WikipediaFilmExtractor:
             Dictionary with extracted film data
         """
         film_data = {
-            "title": title,
+            "title": re.sub(r"\((télé)?film.*\)", "", title).strip(),
             "original_title": None,
             "english_title": None,  # NEW
             "director": None,
@@ -258,6 +258,13 @@ class WikipediaFilmExtractor:
             if match:
                 film_data[field] = self._clean_value(match.group(1))
 
+        # === GENRE ===#
+        if film_data["genre"] is None:
+            film_data["genre"] = []
+        else:
+            film_data["genre"] = [
+                a.strip().lower() for a in film_data["genre"].split((","))
+            ]
         # ===== EXTRACT YEAR =====
         year_match = re.search(r"année\s*=\s*(\d{4})", infobox_content, re.IGNORECASE)
         if year_match:
