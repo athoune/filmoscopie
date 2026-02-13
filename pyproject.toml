@@ -5,7 +5,7 @@ description = "This movie looks like something I already watch."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "wiki-dump-reader @ git+https://github.com/athoune/wiki-dump-reader.git@afbfec5d45924e96e72ff80feebc0d1ef2ab3fde",
+    "wiki-dump-reader @ git+https://github.com/athoune/wiki-dump-reader.git@882f0881576fb6492ff72f208be5cdcb3242ebc9",
     "qdrant-client>=1.16.2",
     "sentence-transformers>=5.2",
     "tiktoken>=0.12.0",
@@ -22,5 +22,7 @@ sound = [
 dev = [
     "black>=26.1.0",
     "isort>=7.0.0",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
 ]
