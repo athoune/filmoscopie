@@ -33,7 +33,7 @@ def test_extract_film_data(dark_city):
     assert film["country"] == ["Australie", "États-Unis"]
     assert film["genre"] == ["science-fiction"]
     # FIXME
-    # assert film["duration_minutes"] == 95
+    assert film["duration_minutes"] == 95
     assert film["actors"] == [
         "Rufus Sewell",
         "William Hurt",

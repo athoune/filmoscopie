@@ -132,7 +132,7 @@ def extract_film_data(title: str, text: str) -> dict[str, Any]:
             film_data["year"] = int(date_match.group(1))
 
     # ===== EXTRACT DURATION =====
-    duration_match = re.search(r"durée\s*=\s*(\d+)", infobox_content, re.IGNORECASE)
+    duration_match = re.search(r"durée\s*=.*?(\d+)", infobox_content, re.IGNORECASE)
     if duration_match:
         film_data["duration_minutes"] = int(duration_match.group(1))
 
