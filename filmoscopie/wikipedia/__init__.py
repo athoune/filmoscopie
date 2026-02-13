@@ -8,7 +8,6 @@ from typing import Any, Generator, TextIO
 from wiki_dump_reader import Cleaner, iterate
 
 from .page import extract_film_data, is_draft, is_film_article, is_sub_theme
-from .source import source
 
 DB_NAME = "wikipedia.db"
 
