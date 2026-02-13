@@ -5,7 +5,7 @@ from .page import is_film_article, is_draft, extract_film_data, parse_list
 
 @fixture
 def dark_city() -> str:
-    return open("./dark_city_fr.wiki", "r").read()
+    return open("./fixtures/dark_city_fr.wiki", "r").read()
 
 
 def test_is_film(dark_city):
