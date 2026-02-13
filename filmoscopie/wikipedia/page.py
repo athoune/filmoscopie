@@ -108,18 +108,16 @@ def extract_film_data(title: str, text: str) -> dict[str, Any]:
         "budget": r"budget\s*=\s*(.+)",
     }
 
+    to_split = ["writer", "producer", "country", "genre"]
+
     for field, pattern in field_patterns.items():
         match = re.search(pattern, infobox_content, re.IGNORECASE)
         if match:
-            film_data[field] = clean_value(match.group(1))
+            if field in to_split:
+                film_data[field] = parse_list(match.group(1))
+            else:
+                film_data[field] = clean_value(match.group(1))
 
-    # === GENRE ===#
-    if film_data["genre"] is None:
-        film_data["genre"] = []
-    else:
-        film_data["genre"] = [
-            a.strip().lower() for a in film_data["genre"].split((","))
-        ]
     # ===== EXTRACT YEAR =====
     year_match = re.search(r"année\s*=\s*(\d{4})", infobox_content, re.IGNORECASE)
     if year_match:
@@ -295,6 +293,7 @@ def clean_value(value: str) -> str:
 
     # Remove wiki links [[Link|Text]] -> Text or [[Link]] -> Link
     value = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", value)
+    value = re.sub(r"\{\{(?:[^|\}]*\|)?([^\}]+)\}\}", r"\1", value)
 
     # Remove HTML tags
     value = re.sub(r"<[^>]+>", "", value)
@@ -312,23 +311,18 @@ def clean_value(value: str) -> str:
     return value.strip()
 
 
-def parse_list(text: str) -> list:
+def parse_list(text: str | None) -> list[str]:
     """
     Parse a list of items (actors, etc.) from wiki text.
     """
-    text = clean_value(text)
-
+    if text is None:
+        return []
     # Split by newline, bullets, or commas
     items = re.split(r"\n\*|\n-|<br\s*/?>|,", text)
 
     # Clean and filter items
-    cleaned_items = []
-    for item in items:
-        item = item.strip()
-        item = re.sub(r"^\*+\s*", "", item)
-        item = re.sub(r"^-+\s*", "", item)
-
-        if item and len(item) > 1:
-            cleaned_items.append(item)
-
-    return cleaned_items[:10]
+    return [
+        clean_value(item).lstrip("- ").strip()
+        for item in items
+        if item and len(item) > 1
+    ]
