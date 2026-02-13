@@ -3,6 +3,10 @@ from typing import Any
 from youtube_search import YoutubeSearch
 from yt_dlp import YoutubeDL
 
+"""
+See https://github.com/Breakthrough/PySceneDetect/
+"""
+
 
 def fetch(terms: str):
     results: list[dict[str, Any]] = YoutubeSearch(terms, max_results=10).to_dict()
