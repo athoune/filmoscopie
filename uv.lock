@@ -274,6 +274,8 @@ dependencies = [
     { name = "sentencepiece" },
     { name = "tiktoken" },
     { name = "wiki-dump-reader" },
+    { name = "youtube-search" },
+    { name = "yt-dlp" },
     { name = "zstandard" },
 ]
 
@@ -293,6 +295,8 @@ requires-dist = [
     { name = "sentencepiece", specifier = ">=0.2.1" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "wiki-dump-reader", git = "https://github.com/athoune/wiki-dump-reader.git?rev=753b1c3cb809f7ac84cbf24a59187a480c2bcca1" },
+    { name = "youtube-search", specifier = ">=2.2.0" },
+    { name = "yt-dlp", specifier = ">=2026.2.4" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
@@ -1688,6 +1692,27 @@ wheels = [
 name = "wiki-dump-reader"
 version = "0.0.4"
 source = { git = "https://github.com/athoune/wiki-dump-reader.git?rev=753b1c3cb809f7ac84cbf24a59187a480c2bcca1#753b1c3cb809f7ac84cbf24a59187a480c2bcca1" }
+
+[[package]]
+name = "youtube-search"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/13/153d6841d0a9850e956f2f99987185c5b8477cc36fbabca24c4acf0321ff/youtube_search-2.2.0.tar.gz", hash = "sha256:5398a7cd65d9b75a8bac27ef689ec044abab3cbfa1f20d19db0277659ac70d98", size = 3313, upload-time = "2025-12-06T15:52:32.393Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0f/3d/7285e86e6390801fb177763a9cf1d81762487f98b3872ab5e1080bb82602/youtube_search-2.2.0-py3-none-any.whl", hash = "sha256:bdffbb5b22d7a7c85a88e6eeb6b00c5b5dbd29ea7b95139d21b8b8dab2ca5871", size = 3554, upload-time = "2025-12-06T15:52:31.217Z" },
+]
+
+[[package]]
+name = "yt-dlp"
+version = "2026.2.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/be/8e099f3f34bac6851490525fb1a8b62d525a95fcb5af082e8c52ba884fb5/yt_dlp-2026.2.4.tar.gz", hash = "sha256:24733ef081116f29d8ee6eae7a48127101e6c56eb7aa228dd604a60654760022", size = 3100305, upload-time = "2026-02-04T00:49:27.043Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/96/38/b17cbeaf6712a4c1b97f7f9ec3a55f3a8ddee678cc88742af47dca0315b7/yt_dlp-2026.2.4-py3-none-any.whl", hash = "sha256:d6ea83257e8127a0097b1d37ee36201f99a292067e4616b2e5d51ab153b3dbb9", size = 3299165, upload-time = "2026-02-04T00:49:25.31Z" },
+]
 
 [[package]]
 name = "zstandard"
