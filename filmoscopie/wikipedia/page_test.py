@@ -43,6 +43,5 @@ def test_extract_film_data(dark_city):
     assert film["writer"] == ["Lem Dobbs", "David S. Goyer", "Alex Proyas"]
     assert film["producer"] == ["Mystery Clock Cinema", "New Line Cinema"]
     assert film["budget"] is None
-    # FIXME
-    # assert film["imdb_id"] == "tt0118929"
+    assert film["imdb_id"] == "0118929"
     # Synopsis has its own test

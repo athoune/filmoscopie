@@ -165,7 +165,7 @@ def extract_film_data(title: str, text: str) -> dict[str, Any]:
     # ===== EXTRACT IMDB ID =====
     # Method 1: Look for IMDb template {{IMDb titre|id=...}}
     imdb_template_match = re.search(
-        r"\{\{IMDb\s+titre\s*\|\s*(?:id\s*=\s*)?([a-z]{2}\d+)", text, re.IGNORECASE
+        r"\{\{IMDb\s+titre\s*\|\s*(?:id\s*=\s*)?([a-z]*\d+)", text, re.IGNORECASE
     )
     if imdb_template_match:
         film_data["imdb_id"] = imdb_template_match.group(1)
