@@ -3,9 +3,10 @@ FROM python:3.14-slim
 RUN adduser --disabled-password --disabled-login filmoscopie
 
 # rust compilation is boring, lets cache it
+ENV RUST_VERSION=1.93.1
 RUN apt update \
     && apt install --yes rustup \
-    && rustup default stable
+    && rustup default ${RUST_VERSION}
 # numpy and its friends need some tools
 RUN apt --yes install \ 
     llvm \
@@ -27,7 +28,8 @@ RUN mkdir -p /opt/uv \
     && ln -s /opt/uv/venv/bin/uv /usr/local/bin
 
 WORKDIR /usr/src
-RUN git clone -b v0.2.1 https://github.com/google/sentencepiece.git \
+ENV SENTENCEPIECE_VERSION=0.2.1
+RUN git clone -b v${SENTENCEPIECE_VERSION} https://github.com/google/sentencepiece.git \
     && cd sentencepiece \
     && mkdir build \
     && cd build \
