@@ -22,6 +22,18 @@ from scenedetect import open_video, SceneManager, ContentDetector, VideoStream
 def scenes(
     path: str,
 ) -> Generator[tuple[FrameTimecode, FrameTimecode, Image.Image], None, None]:
+    """
+    Extract scenes from a video.
+
+    Args:
+        path (str): video file path.
+
+    Yields
+        Generator[tuple[FrameTimecode, FrameTimecode, Image.Image], None, None]:
+            * start time
+            * end time
+            * image of the first frame
+    """
     video: VideoStream = open_video(str(path), backend="pyav")
     video.seek(5 * video.frame_rate)  # 5s
     scene_manager = SceneManager()
@@ -36,6 +48,10 @@ def scenes(
 
 
 class Embedator:
+    """
+    Load model once, embed many time.
+    """
+
     def __init__(self):
         self.model = ImageEmbedding(model_name="Qdrant/clip-ViT-B-32-vision")
         print(self.model.embedding_size)
@@ -44,6 +60,14 @@ class Embedator:
         self,
         images: Generator[Image.Image, None, None],
     ) -> Generator[np.ndarray, None, None]:
+        """Embed of collection of images.
+
+        Args:
+            images (Generator[Image.Image, None, None])
+
+        Yields:
+            Generator[np.ndarray, None, None]: embeded images
+        """
         i = 0
         for batch in batched(images, 10):
             for embedding in self.model.embed(batch):
@@ -53,13 +77,22 @@ class Embedator:
 
 
 def classes(folder: str | Path) -> Generator[Path, None, None]:
+    """Enumerate all classes in a folder."""
     for class_ in Path(folder).iterdir():
         if class_.name.startswith("."):
             continue
         yield class_
 
 
-def images(folder: str | Path):
+def images(folder: str | Path) -> Generator[Path, None, None]:
+    """_summary_
+
+    Args:
+        folder (str | Path): images folder
+
+    Yields:
+        Generator[Path, None, None]: image path
+    """
     p = Path(folder)
     for img in p.glob("*.webp"):
         yield img
@@ -68,6 +101,14 @@ def images(folder: str | Path):
 
 
 def videos(folder: str | Path) -> Generator[Path, None, None]:
+    """All videos in a folder
+
+    Args:
+        folder (str | Path): video folder
+
+    Yields:
+        Generator[Path, None, None]: video path
+    """
     p = Path(folder)
     for f in ("mkv", "mp4", "webm"):
         for video in p.glob(f"*.{f}"):
