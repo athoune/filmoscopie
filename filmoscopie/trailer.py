@@ -4,6 +4,8 @@ from youtube_search import YoutubeSearch
 from yt_dlp import YoutubeDL
 
 """
+Most data center IP ranges ban yt-dlp, what a pity.
+
 See https://github.com/Breakthrough/PySceneDetect/
 """
 
