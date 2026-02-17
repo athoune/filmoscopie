@@ -20,8 +20,8 @@ from scenedetect import open_video, SceneManager, ContentDetector, VideoStream
 
 
 def scenes(
-    path: str,
-) -> Generator[tuple[FrameTimecode, FrameTimecode, Image.Image], None, None]:
+    path: Path,
+) -> Generator[tuple[Path, FrameTimecode, FrameTimecode, Image.Image], None, None]:
     """
     Extract scenes from a video.
 
@@ -34,17 +34,19 @@ def scenes(
             * end time
             * image of the first frame
     """
+    name = path.name.replace("/", "--")
+    home = path.parent
     video: VideoStream = open_video(str(path), backend="pyav")
     video.seek(5 * video.frame_rate)  # 5s
     scene_manager = SceneManager()
     scene_manager.add_detector(ContentDetector())
 
     scene_manager.detect_scenes(video=video)
-    for start, end in scene_manager.get_scene_list():
+    for i, (start, end) in enumerate(scene_manager.get_scene_list()):
         video.seek(start)
         img_array = video.read()
         assert img_array is not False
-        yield start, end, Image.fromarray(img_array)
+        yield home / f"{name}-{i}", start, end, Image.fromarray(img_array)
 
 
 class Embedator:
@@ -58,22 +60,38 @@ class Embedator:
 
     def embed(
         self,
-        images: Generator[Image.Image, None, None],
-    ) -> Generator[np.ndarray, None, None]:
+        images: Generator[tuple[Path, Image.Image], None, None],
+    ) -> Generator[tuple[Path, np.ndarray], None, None]:
         """Embed of collection of images.
 
         Args:
             images (Generator[Image.Image, None, None])
 
         Yields:
-            Generator[np.ndarray, None, None]: embeded images
+            tuple[str, np.ndarray]: name, embeded image
         """
         i = 0
-        for batch in batched(images, 10):
-            for embedding in self.model.embed(batch):
-                yield embedding
+        for batch in batched(_embed_not_cached(images), 10):
+            n = 0
+            print(batch[0])
+            for embedding in self.model.embed(b[1] for b in batch):
+                p: Path = batch[n][0]
+                p = p.parent / f"{p.name}.ndarray"
+                embedding.tofile(p)
+                yield p, embedding
+                n += 1
             i += len(batch)
         print("size:", i)
+
+
+def _embed_not_cached(
+    images: Generator[tuple[Path, Image.Image], None, None],
+) -> Generator[tuple[Path, Image.Image], None, None]:
+    for path, image in images:
+        p = path.parent / f"{path.name}.ndarray"
+        if p.exists():
+            continue
+        yield path, image
 
 
 def classes(folder: str | Path) -> Generator[Path, None, None]:
@@ -123,5 +141,7 @@ if __name__ == "__main__":
         print(class_.name)
         for video in videos(class_):
             print(video)
-            for embedded in embedator.embed(i[2] for i in scenes(video)):
-                pass
+            for name, embedded in embedator.embed(
+                (frame_name, img) for frame_name, start, stop, img in scenes(video)
+            ):
+                print(name)
