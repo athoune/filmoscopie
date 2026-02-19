@@ -1,4 +1,4 @@
-FROM debian:forky-slim
+FROM debian:trixie-slim
 
 RUN useradd filmoscopie -s /sbin/nologin
 
@@ -11,17 +11,18 @@ RUN apt update \
     python3-venv \
     rustup \
     llvm \
+    nasm \
     libopenblas-dev \
     libgfortran-14-dev \
     libedit-dev \
     libgomp1 \
     libsentencepiece0 \
     libopencv-dev \
+    libaom-dev \
     cmake \
     g++ \
     git  \
     curl \
-    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # rust compilation is boring, lets cache it
@@ -54,7 +55,26 @@ RUN mkdir -p /opt/uv \
 #     && .venv/bin/pip install pytest \
 #     && .venv/bin/pytest .
 
+WORKDIR /usr/src
+# libav has a bug when reading opus part of webm file screwed by Youtube
+ENV FFMPEG_TAG=52b676bb29
+RUN git clone https://code.ffmpeg.org/FFmpeg/FFmpeg.git --single-branch --depth 1\
+    && cd FFmpeg \
+    && ./configure \
+    --enable-gpl \
+    --enable-libaom  \
+    --disable-static \
+    --enable-shared \
+    --enable-small \
+    --disable-ffplay  \
+    --disable-doc \
+    && make -j 4 \
+    && make install
+
+#    && git checkout ${FFMPEG_TAG} \
+
 USER filmoscopie
+ENV LD_LIBRARY_PATH=/usr/local/lib
 WORKDIR /home/filmoscopie
 # RUN uv venv \
 #     && uv pip install /usr/src/sentencepiece/python/*.whl
