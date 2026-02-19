@@ -2,7 +2,7 @@ docker:
 	docker build -t filmoscopie .
 
 docker-sync:
-	docker run -ti --rm -v `pwd`:/src -w /src -e UV_CACHE_DIR=.uv_cache filmoscopie /usr/local/bin/uv sync
+	docker run -t --rm -v `pwd`:/src -w /src -e UV_CACHE_DIR=.uv_cache filmoscopie /usr/local/bin/uv sync
 
 docker-dev:
 	docker run \
@@ -10,6 +10,7 @@ docker-dev:
 		--rm \
 		-v `pwd`:/src \
 		-w /src -e UV_CACHE_DIR=.uv_cache \
+		--name filmoscopie-dev \
 		-e SENTENCE_TRANSFORMERS_HOME=.sentence_transformers_cache \
 		-h melies \
 		filmoscopie bash
