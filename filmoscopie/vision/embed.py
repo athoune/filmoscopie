@@ -65,7 +65,7 @@ def _embed_is_cached(
 
 def classes(folder: Path) -> Generator[Path, None, None]:
     """Enumerate all classes in a folder."""
-    return (c for c in folder.iterdir() if not c.name.startswith("."))
+    return (c for c in folder.iterdir() if c.name[0] not in "_.")
 
 
 def _video_not_indexed(v: Generator[Path, None, None]) -> Generator[Path, None, None]:
