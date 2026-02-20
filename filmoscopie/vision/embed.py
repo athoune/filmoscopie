@@ -1,7 +1,7 @@
 # Models
 # ======
-# * https://huggingface.co/Qdrant/clip-ViT-B-32-vision
-# * https://huggingface.co/Qdrant/resnet50-onnx (Micrsoft)
+# * https://huggingface.co/Qdrant/clip-ViT-B-32-vision => 70%
+# * https://huggingface.co/Qdrant/resnet50-onnx (Microsoft)
 #
 # See
 # ---
@@ -63,9 +63,10 @@ def _embed_is_cached(
             yield path, image, None
 
 
-def classes(folder: Path) -> Generator[Path, None, None]:
+def classes(folder: Path, hide="_.") -> Generator[Path, None, None]:
     """Enumerate all classes in a folder."""
-    return (c for c in folder.iterdir() if c.name[0] not in "_.")
+    assert folder.is_dir()
+    return (c for c in folder.iterdir() if c.is_dir() and c.name[0] not in hide)
 
 
 def _video_not_indexed(v: Generator[Path, None, None]) -> Generator[Path, None, None]:
