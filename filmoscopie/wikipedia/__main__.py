@@ -1,4 +1,5 @@
-from ..wikipedia import WikipediaFilmExtractor, source
+from ..wikipedia import WikipediaFilmExtractor
+from .source import source
 
 # ===== STEP 1: EXTRACTION =====
 print("=" * 60)
