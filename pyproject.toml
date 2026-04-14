@@ -43,7 +43,7 @@ no-binary-package = ["av"]#, "opencv-python"]
 dev = [
     "black>=26.1.0",
     "isort>=7.0.0",
-    "pytest>=9.0.2",
+    "pytest>=9.0.3",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.0",
 ]
