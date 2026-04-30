@@ -29,7 +29,7 @@ vision = [
 
 jupyter = [
     "ipywidgets>=8.1.8",
-    "jupyterlab>=4.5.4",
+    "jupyterlab>=4.5.7",
 ]
 
 [tool.uv]
@@ -48,5 +48,5 @@ dev = [
     "ruff>=0.15.0",
 ]
 jupyter = [
-    "jupyterlab>=4.5.4",
+    "jupyterlab>=4.5.7",
 ]
